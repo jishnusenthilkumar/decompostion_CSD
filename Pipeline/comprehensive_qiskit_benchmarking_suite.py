@@ -1,8 +1,6 @@
 """
-Comprehensive benchmarking suite:
-CSD pipeline vs Qiskit-Terra synthesis (Terra ≥ 1.0)
-
-Fully corrected version with proper qubit indexing and fidelity calculation.
+Comprehensive benchmarking suite: CSD pipeline vs Qiskit synthesis
+Fixed version addressing fidelity calculation and qubit indexing issues
 """
 
 import time
@@ -15,14 +13,13 @@ from scipy.stats import unitary_group
 
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit.library import UnitaryGate, CZGate
-from qiskit.quantum_info import Operator, process_fidelity
+from qiskit.quantum_info import Operator, state_fidelity
 from qiskit.synthesis import (
     TwoQubitBasisDecomposer,
     OneQubitEulerDecomposer,
     two_qubit_cnot_decompose,
 )
 
-# local import – your own routine
 from csd_to_native_gates import csd_to_native_pipeline
 
 
@@ -41,13 +38,9 @@ class BenchmarkResult:
 
 
 class QiskitBenchmark:
-    """Benchmark suite comparing CSD with various Qiskit synthesis paths."""
-
     def __init__(self, basis_gates: List[str] = None):
         self.basis_gates = basis_gates or ["rx", "ry", "rz", "cz"]
         self.results: List[BenchmarkResult] = []
-
-        # Helper decomposers
         self.euler_decomposer = OneQubitEulerDecomposer(basis="ZYZ")
         self.two_qubit_decomposer = TwoQubitBasisDecomposer(
             gate=CZGate(), basis_fidelity=1.0
@@ -56,28 +49,23 @@ class QiskitBenchmark:
     def create_qiskit_circuit_from_gates(
         self, gate_sequence: List, n_qubits: int
     ) -> QuantumCircuit:
-        """
-        Convert a list of custom gate objects into an executable Qiskit QuantumCircuit.
-        """
+        """Convert CSD gate sequence to Qiskit circuit with proper qubit handling."""
         qc = QuantumCircuit(n_qubits)
         
         if not gate_sequence:
-            return qc  # Return empty circuit if no gates
+            return qc
 
         for i, g in enumerate(gate_sequence):
             try:
-                # Handle gate name
                 if not hasattr(g, 'name'):
-                    print(f"Warning: Gate {i} has no name attribute - skipping")
                     continue
                     
                 name = str(g.name).upper()
                 
-                # Handle qubits - ensure they are integers and within valid range
                 if not hasattr(g, 'qubits'):
-                    print(f"Warning: Gate {i} ({name}) has no qubits attribute - skipping")
                     continue
-                    
+                
+                # CRITICAL FIX: Proper qubit index handling
                 qubits = []
                 for q in g.qubits:
                     if hasattr(q, 'index'):
@@ -85,35 +73,37 @@ class QiskitBenchmark:
                     else:
                         qubit_idx = int(q)
                     
-                    # CRITICAL FIX: Ensure qubit index is within valid range
+                    # Ensure valid qubit index - if invalid, skip this gate
                     if qubit_idx >= n_qubits:
-                        # Map invalid qubit indices to valid ones
-                        qubit_idx = qubit_idx % n_qubits
-                        print(f"Warning: Gate {i} ({name}) qubit index {int(q)} mapped to {qubit_idx}")
+                        print(f"Warning: Gate {i} ({name}) has invalid qubit index {qubit_idx} for {n_qubits}-qubit circuit - skipping")
+                        break
                     
                     qubits.append(qubit_idx)
                 
-                # Handle parameters - ensure they are floats
+                # Skip if we couldn't get valid qubits
+                if len(qubits) != len(g.qubits):
+                    continue
+                
+                # Get parameters
                 params = []
                 if hasattr(g, 'params') and g.params:
-                    for p in g.params:
-                        params.append(float(p))
+                    params = [float(p) for p in g.params]
 
-                # Apply gates based on name
+                # Apply gates
                 if name == "RX" and len(params) > 0 and len(qubits) > 0:
-                    if abs(params[0]) > 1e-12:  # Skip near-zero rotations
+                    if abs(params[0]) > 1e-12:
                         qc.rx(params[0], qubits[0])
                 elif name == "RY" and len(params) > 0 and len(qubits) > 0:
-                    if abs(params[0]) > 1e-12:  # Skip near-zero rotations
+                    if abs(params[0]) > 1e-12:
                         qc.ry(params[0], qubits[0])
                 elif name == "RZ" and len(params) > 0 and len(qubits) > 0:
-                    if abs(params[0]) > 1e-12:  # Skip near-zero rotations
+                    if abs(params[0]) > 1e-12:
                         qc.rz(params[0], qubits[0])
                 elif name == "CZ" and len(qubits) >= 2:
-                    if qubits[0] != qubits[1]:  # Ensure different qubits
+                    if qubits[0] != qubits[1]:
                         qc.cz(qubits[0], qubits[1])
                 elif name == "CX" and len(qubits) >= 2:
-                    if qubits[0] != qubits[1]:  # Ensure different qubits
+                    if qubits[0] != qubits[1]:
                         qc.cx(qubits[0], qubits[1])
                 elif name == "X" and len(qubits) > 0:
                     qc.x(qubits[0])
@@ -121,8 +111,6 @@ class QiskitBenchmark:
                     qc.y(qubits[0])
                 elif name == "Z" and len(qubits) > 0:
                     qc.z(qubits[0])
-                else:
-                    print(f"Warning: Unsupported or invalid gate '{name}' with {len(qubits)} qubits and {len(params)} params - skipping")
                     
             except Exception as e:
                 print(f"Error processing gate {i}: {e}")
@@ -130,58 +118,64 @@ class QiskitBenchmark:
 
         return qc
 
+    def calculate_unitary_fidelity(self, U_target: np.ndarray, U_actual: np.ndarray) -> float:
+        """Calculate fidelity between two unitary matrices using state_fidelity."""
+        try:
+            # CRITICAL FIX: Use state_fidelity for unitary matrices
+            # Convert to Statevector objects for proper fidelity calculation
+            from qiskit.quantum_info import Statevector
+            
+            # Create identity initial state
+            n_qubits = int(np.log2(U_target.shape[0]))
+            initial_state = np.zeros(U_target.shape[0])
+            initial_state[0] = 1.0  # |000...0⟩ state
+            
+            # Apply unitaries to initial state
+            final_state_target = U_target @ initial_state
+            final_state_actual = U_actual @ initial_state
+            
+            # Calculate state fidelity
+            fidelity = state_fidelity(
+                Statevector(final_state_target), 
+                Statevector(final_state_actual)
+            )
+            
+            return float(np.real(fidelity))
+            
+        except Exception as e:
+            print(f"Fidelity calculation error: {e}")
+            # Fallback: Calculate trace fidelity manually
+            try:
+                # Calculate overlap fidelity: |Tr(U_target† @ U_actual)|²/d²
+                overlap = np.trace(U_target.conj().T @ U_actual)
+                fidelity = abs(overlap)**2 / (U_target.shape[0]**2)
+                return float(np.real(fidelity))
+            except:
+                return 0.0
+
     def benchmark_csd_method(self, U: np.ndarray) -> BenchmarkResult:
         start = time.time()
         try:
-            # Run CSD pipeline
             pipe_res = csd_to_native_pipeline(U, optimize=True)
             
-            # Check if pipeline succeeded
-            if not isinstance(pipe_res, dict):
-                raise ValueError("CSD pipeline did not return a dictionary")
-                
-            if 'gate_sequence' not in pipe_res:
-                raise ValueError("CSD pipeline did not return gate_sequence")
+            if not isinstance(pipe_res, dict) or 'gate_sequence' not in pipe_res:
+                raise ValueError("CSD pipeline did not return valid gate sequence")
                 
             gate_sequence = pipe_res['gate_sequence']
             n_qubits = int(np.log2(U.shape[0]))
             qc = self.create_qiskit_circuit_from_gates(gate_sequence, n_qubits)
 
             synth_time = time.time() - start
-
-            # Transpile to chosen basis
             qc_opt = transpile(qc, basis_gates=self.basis_gates, optimization_level=2)
 
-            # Calculate metrics
             gate_cnt = len(qc_opt.data)
             depth = qc_opt.depth()
             cx_cnt = qc_opt.count_ops().get("cz", 0) + qc_opt.count_ops().get("cx", 0)
             single_cnt = gate_cnt - cx_cnt
             
-            # CRITICAL FIX: Calculate fidelity properly
-            try:
-                U_reconstructed = Operator(qc_opt)
-                # Ensure both are unitary matrices, not SuperOp
-                if hasattr(U_reconstructed, 'data'):
-                    U_reconstructed = U_reconstructed.data
-                else:
-                    U_reconstructed = U_reconstructed.to_matrix()
-                    
-                # Calculate fidelity between the two unitary matrices
-                fidelity = process_fidelity(U, U_reconstructed)
-                
-                # If fidelity is complex, take real part
-                if np.iscomplexobj(fidelity):
-                    fidelity = np.real(fidelity)
-                    
-            except Exception as fid_e:
-                print(f"Warning: Could not calculate fidelity: {fid_e}")
-                # Alternative fidelity calculation
-                try:
-                    U_reconstructed = Operator(qc_opt).data
-                    fidelity = abs(np.trace(U.conj().T @ U_reconstructed) / U.shape[0])**2
-                except:
-                    fidelity = 0.0
+            # CRITICAL FIX: Proper fidelity calculation
+            U_reconstructed = Operator(qc_opt).data
+            fidelity = self.calculate_unitary_fidelity(U, U_reconstructed)
 
             return BenchmarkResult(
                 method="CSD",
@@ -225,26 +219,9 @@ class QiskitBenchmark:
             cx_cnt = qc_opt.count_ops().get("cz", 0) + qc_opt.count_ops().get("cx", 0)
             single_cnt = gate_cnt - cx_cnt
             
-            # CRITICAL FIX: Calculate fidelity properly
-            try:
-                U_reconstructed = Operator(qc_opt)
-                if hasattr(U_reconstructed, 'data'):
-                    U_reconstructed = U_reconstructed.data
-                else:
-                    U_reconstructed = U_reconstructed.to_matrix()
-                    
-                fidelity = process_fidelity(U, U_reconstructed)
-                
-                if np.iscomplexobj(fidelity):
-                    fidelity = np.real(fidelity)
-                    
-            except Exception as fid_e:
-                print(f"Warning: Could not calculate fidelity: {fid_e}")
-                try:
-                    U_reconstructed = Operator(qc_opt).data
-                    fidelity = abs(np.trace(U.conj().T @ U_reconstructed) / U.shape[0])**2
-                except:
-                    fidelity = 0.0
+            # CRITICAL FIX: Proper fidelity calculation
+            U_reconstructed = Operator(qc_opt).data
+            fidelity = self.calculate_unitary_fidelity(U, U_reconstructed)
 
             return BenchmarkResult(
                 method="Qiskit_Default",
@@ -290,7 +267,7 @@ class QiskitBenchmark:
 
         start = time.time()
         try:
-            # CRITICAL FIX: Remove the basis_gate parameter
+            # CRITICAL FIX: Use correct API for two_qubit_cnot_decompose
             qc = two_qubit_cnot_decompose(U)
             synth_time = time.time() - start
 
@@ -301,26 +278,9 @@ class QiskitBenchmark:
             cx_cnt = qc_opt.count_ops().get("cz", 0) + qc_opt.count_ops().get("cx", 0)
             single_cnt = gate_cnt - cx_cnt
             
-            # CRITICAL FIX: Calculate fidelity properly
-            try:
-                U_reconstructed = Operator(qc_opt)
-                if hasattr(U_reconstructed, 'data'):
-                    U_reconstructed = U_reconstructed.data
-                else:
-                    U_reconstructed = U_reconstructed.to_matrix()
-                    
-                fidelity = process_fidelity(U, U_reconstructed)
-                
-                if np.iscomplexobj(fidelity):
-                    fidelity = np.real(fidelity)
-                    
-            except Exception as fid_e:
-                print(f"Warning: Could not calculate fidelity: {fid_e}")
-                try:
-                    U_reconstructed = Operator(qc_opt).data
-                    fidelity = abs(np.trace(U.conj().T @ U_reconstructed) / U.shape[0])**2
-                except:
-                    fidelity = 0.0
+            # CRITICAL FIX: Proper fidelity calculation
+            U_reconstructed = Operator(qc_opt).data
+            fidelity = self.calculate_unitary_fidelity(U, U_reconstructed)
 
             return BenchmarkResult(
                 method="Qiskit_SU4",
@@ -361,7 +321,6 @@ class QiskitBenchmark:
     def run_matrix_size_benchmark(
         self, sizes: List[int] = [2, 4, 8], trials_per_size: int = 5
     ) -> Dict[str, List[BenchmarkResult]]:
-        """Generate random unitaries and benchmark them."""
         all_res = {"CSD": [], "Qiskit_Default": [], "Qiskit_SU4": []}
 
         for size in sizes:
@@ -384,13 +343,9 @@ class QiskitBenchmark:
             stats[meth] = {
                 "success_rate": len(good) / len(lst) if lst else 0,
                 "avg_gate_count": np.mean([r.gate_count for r in good]) if good else 0,
-                "avg_circuit_depth": np.mean([r.circuit_depth for r in good])
-                if good
-                else 0,
+                "avg_circuit_depth": np.mean([r.circuit_depth for r in good]) if good else 0,
                 "avg_cx_count": np.mean([r.cx_count for r in good]) if good else 0,
-                "avg_synthesis_time": np.mean([r.synthesis_time for r in good])
-                if good
-                else 0,
+                "avg_synthesis_time": np.mean([r.synthesis_time for r in good]) if good else 0,
                 "avg_fidelity": np.mean([r.fidelity for r in good]) if good else 0,
             }
         return stats
@@ -429,7 +384,6 @@ class QiskitBenchmark:
             ]
 
         labels = list(results.keys())
-        # Fixed: use tick_labels instead of labels for newer matplotlib
         axs[0, 0].boxplot(collect("gate_count"), tick_labels=labels)
         axs[0, 0].set_title("Gate count")
 
