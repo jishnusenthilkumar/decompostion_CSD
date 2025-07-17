@@ -15,8 +15,9 @@ def test_random_unitary():
     
     results = csd_to_native_pipeline(U, optimize=True)
     print_results(results)
-    
-    return results
+
+    # Validate the decomposition accuracy
+    assert results["metrics"]["csd_error"] < 1e-10
 
 
 
