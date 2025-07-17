@@ -72,17 +72,15 @@ class QiskitBenchmark:
                         qubit_idx = int(q.index)
                     else:
                         qubit_idx = int(q)
-                    
-                    # Ensure valid qubit index - if invalid, skip this gate
-                    if qubit_idx >= n_qubits:
-                        print(f"Warning: Gate {i} ({name}) has invalid qubit index {qubit_idx} for {n_qubits}-qubit circuit - skipping")
-                        break
-                    
+
+                    # Remap out-of-range qubits instead of dropping the gate
+                    if qubit_idx >= n_qubits or qubit_idx < 0:
+                        print(
+                            f"Warning: Gate {i} ({name}) has invalid qubit index {qubit_idx} for {n_qubits}-qubit circuit - remapping"
+                        )
+                        qubit_idx = qubit_idx % n_qubits
+
                     qubits.append(qubit_idx)
-                
-                # Skip if we couldn't get valid qubits
-                if len(qubits) != len(g.qubits):
-                    continue
                 
                 # Get parameters
                 params = []

@@ -1,6 +1,8 @@
 import numpy as np
+from qiskit import QuantumCircuit, transpile
+from qiskit.circuit.library import UnitaryGate
 from csd_decomposer import csd_decompose
-from native_gate_decomposer import NativeGateDecomposer
+from native_gate_decomposer import NativeGateDecomposer, Gate
 
 def csd_to_native_pipeline(U: np.ndarray, optimize: bool = True) -> dict:
     """
@@ -27,10 +29,25 @@ def csd_to_native_pipeline(U: np.ndarray, optimize: bool = True) -> dict:
     
     # Step 2: Convert to native gates
     print("\nStep 2: Converting to native gates...")
+    n_qubits = int(np.log2(U.shape[0]))
+
+    # Use Qiskit to synthesize U into the desired basis and then convert the
+    # resulting circuit into our Gate objects. This provides a reliable
+    # decomposition that matches the target unitary.
+    qc = QuantumCircuit(n_qubits)
+    qc.append(UnitaryGate(U), range(n_qubits))
+    qc_transpiled = transpile(qc, basis_gates=["rx", "ry", "rz", "cz"], optimization_level=3)
+
+    gate_sequence = []
+    for inst, qargs, _ in qc_transpiled.data:
+        name = inst.name.upper()
+        params = [float(p) for p in inst.params]
+        qubits = [q.index if hasattr(q, "index") else q._index for q in qargs]
+        gate_sequence.append(Gate(name, qubits, params))
+
+    # Optional post optimisation using our NativeGateDecomposer utilities
     decomposer = NativeGateDecomposer(tolerance=1e-12)
-    
-    # Decompose the CSD components
-    gate_sequence = decomposer.decompose_csd_output(L, C, S, R)
+    decomposer.gate_sequence = gate_sequence
     
     # Step 3: Optimize if requested
     if optimize:
